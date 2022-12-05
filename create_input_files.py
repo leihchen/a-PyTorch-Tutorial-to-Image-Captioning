@@ -7,5 +7,5 @@ if __name__ == '__main__':
                        image_folder='/Users/harddrive/Downloads/coco_src',
                        captions_per_image=5,
                        min_word_freq=5,
-                       output_folder='/Users/harddrive/Downloads/coco',
+                       output_folder='/media/ssd/caption data/',
                        max_len=50)
