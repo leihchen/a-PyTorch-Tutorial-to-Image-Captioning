@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torchvision
-
+import clip
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -14,10 +14,10 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.enc_image_size = encoded_image_size
 
-        resnet = torchvision.models.resnet101(pretrained=True)  # pretrained ImageNet ResNet-101
+        resnet, _ = clip.load('RN50', device="cpu", jit=False)  # pretrained ImageNet ResNet-101
 
         # Remove linear and pool layers (since we're not doing classification)
-        modules = list(resnet.children())[:-2]
+        modules = list(list(resnet.children())[0].children())[:-1]
         self.resnet = nn.Sequential(*modules)
 
         # Resize image to fixed size to allow input images of variable size
