@@ -1,0 +1,5 @@
+.DS_Store
+*__pycache__/
+caption_datasets/
+flickr30k_images/
+flickr30k_output/

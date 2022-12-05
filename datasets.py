@@ -48,6 +48,7 @@ class CaptionDataset(Dataset):
             img = self.transform(img)
 
         caption = torch.LongTensor(self.captions[i])
+        source_padding = torch.LongTensor([0 if token != 0 else 1 for token in caption])
 
         caplen = torch.LongTensor([self.caplens[i]])
 

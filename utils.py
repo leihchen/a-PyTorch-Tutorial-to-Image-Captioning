@@ -3,7 +3,9 @@ import numpy as np
 import h5py
 import json
 import torch
-from scipy.misc import imread, imresize
+# from scipy.misc import imread, imresize
+# from matplotlib.pyplot import imread
+import cv2
 from tqdm import tqdm
 from collections import Counter
 from random import seed, choice, sample
@@ -112,11 +114,11 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
                 assert len(captions) == captions_per_image
 
                 # Read images
-                img = imread(impaths[i])
+                img = cv2.imread(impaths[i])
                 if len(img.shape) == 2:
                     img = img[:, :, np.newaxis]
                     img = np.concatenate([img, img, img], axis=2)
-                img = imresize(img, (256, 256))
+                img = cv2.resize(img, (256, 256))
                 img = img.transpose(2, 0, 1)
                 assert img.shape == (3, 256, 256)
                 assert np.max(img) <= 255
@@ -278,9 +280,12 @@ def accuracy(scores, targets, k):
     :param k: k in top-k accuracy
     :return: top-k accuracy
     """
-
+    scores, targets = scores.data, targets.data
+    print(scores.shape, targets.shape)
     batch_size = targets.size(0)
     _, ind = scores.topk(k, 1, True, True)
+    ind = ind.view(-1,k) # 704 x 5, target: 704 x 5
     correct = ind.eq(targets.view(-1, 1).expand_as(ind))
     correct_total = correct.view(-1).float().sum()  # 0D tensor
+    print(correct_total)
     return correct_total.item() * (100.0 / batch_size)

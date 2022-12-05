@@ -10,30 +10,39 @@ from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
+import transformer
+
 # Data parameters
-data_folder = '/media/ssd/caption data'  # folder with data files saved by create_input_files.py
-data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+data_folder = 'flickr30k_output'  # folder with data files saved by create_input_files.py
+# data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
+data_name = 'flickr30k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
 emb_dim = 512  # dimension of word embeddings
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
+
+encoded_image_size = 8
+embedding_dim = 2048 # Resnet 101 [:-2] layer output dim
+vocab_size = 7003 # Vocab size for flickr
+num_decoder_blocks = 3
+num_decoder_heads = 2
 
 # Training parameters
 start_epoch = 0
 epochs = 120  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
 batch_size = 32
-workers = 1  # for data-loading; right now, only 1 works with h5py
+workers = 0  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
 grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
-print_freq = 100  # print training/validation stats every __ batches
+print_freq = 1  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = None  # path to checkpoint, None if none
 
@@ -52,17 +61,19 @@ def main():
 
     # Initialize / load checkpoint
     if checkpoint is None:
-        decoder = DecoderWithAttention(attention_dim=attention_dim,
-                                       embed_dim=emb_dim,
-                                       decoder_dim=decoder_dim,
-                                       vocab_size=len(word_map),
-                                       dropout=dropout)
-        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
-                                             lr=decoder_lr)
-        encoder = Encoder()
+        encoder = Encoder(encoded_image_size=encoded_image_size)
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
+        # decoder = DecoderWithAttention(attention_dim=attention_dim,
+        #                                embed_dim=emb_dim,
+        #                                decoder_dim=decoder_dim,
+        #                                vocab_size=len(word_map),
+        #                                dropout=dropout)
+        # decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
+        #                                      lr=decoder_lr)
+        decoder = transformer.Decoder(vocab_size, embedding_dim, num_decoder_blocks, num_decoder_heads, device=device)
+        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=decoder_lr)
 
     else:
         checkpoint = torch.load(checkpoint)
@@ -93,7 +104,7 @@ def main():
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
         CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
-        batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
+        batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True) 
 
     # Epochs
     for epoch in range(start_epoch, epochs):
@@ -168,22 +179,24 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         caplens = caplens.to(device)
 
         # Forward prop.
-        imgs = encoder(imgs)
-        scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(imgs, caps, caplens)
+        encoder_out = encoder(imgs) # (batch_size, encoded_image_size, encoded_image_size, 2048)
+        # scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(imgs, caps, caplens)
+        encoder_out = encoder_out.view(batch_size, -1, embedding_dim) 
+        pred, alphas = decoder(encoder_out, None, caps)
 
         # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
-        targets = caps_sorted[:, 1:]
+        # targets = caps_sorted[:, 1:]
 
         # Remove timesteps that we didn't decode at, or are pads
         # pack_padded_sequence is an easy trick to do this
-        scores, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True)
-        targets, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
 
         # Calculate loss
-        loss = criterion(scores, targets)
+        # loss = criterion(scores, targets)
+        # pred = pred[:, :-1, :].transpose(1, 2)
+        loss = criterion(pred[:, :-1, :].transpose(1, 2), caps[:, 1:])
 
         # Add doubly stochastic attention regularization
-        loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
+        # loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
         # Back prop.
         decoder_optimizer.zero_grad()
@@ -192,10 +205,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         loss.backward()
 
         # Clip gradients
-        if grad_clip is not None:
-            clip_gradient(decoder_optimizer, grad_clip)
-            if encoder_optimizer is not None:
-                clip_gradient(encoder_optimizer, grad_clip)
+        # if grad_clip is not None:
+        #     clip_gradient(decoder_optimizer, grad_clip)
+        #     if encoder_optimizer is not None:
+        #         clip_gradient(encoder_optimizer, grad_clip)
 
         # Update weights
         decoder_optimizer.step()
@@ -203,6 +216,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
             encoder_optimizer.step()
 
         # Keep track of metrics
+        decode_lengths = (caplens.squeeze(1) - 1).tolist()
+        print(len(decode_lengths), pred.shape)
+        scores = pack_padded_sequence(pred, decode_lengths, batch_first=True, enforce_sorted=False)
+        targets = pack_padded_sequence(caps, decode_lengths, batch_first=True, enforce_sorted=False)
         top5 = accuracy(scores, targets, 5)
         losses.update(loss.item(), sum(decode_lengths))
         top5accs.update(top5, sum(decode_lengths))
