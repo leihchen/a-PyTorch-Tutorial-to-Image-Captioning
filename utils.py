@@ -3,11 +3,11 @@ import numpy as np
 import h5py
 import json
 import torch
-from scipy.misc import imread, imresize
+# from scipy.misc import imread, imresize
 from tqdm import tqdm
 from collections import Counter
 from random import seed, choice, sample
-
+import cv2
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
                        max_len=100):
@@ -112,11 +112,11 @@ def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_i
                 assert len(captions) == captions_per_image
 
                 # Read images
-                img = imread(impaths[i])
+                img = cv2.imread(impaths[i])
                 if len(img.shape) == 2:
                     img = img[:, :, np.newaxis]
                     img = np.concatenate([img, img, img], axis=2)
-                img = imresize(img, (224, 224))
+                img = cv2.resize(img, (224, 224))
                 img = img.transpose(2, 0, 1)
                 assert img.shape == (3, 224, 224)
                 assert np.max(img) <= 255
