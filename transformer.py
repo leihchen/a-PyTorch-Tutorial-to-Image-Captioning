@@ -10,8 +10,29 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker
 
 import torch
-from torch.nn import Module, Linear, Softmax, ReLU, LayerNorm, ModuleList, Dropout, Embedding, CrossEntropyLoss
+from torch.nn import Module, Linear, Softmax, ReLU, LayerNorm, ModuleList, Dropout, Embedding, CrossEntropyLoss, LeakyReLU, Sequential
 from torch.optim import Adam
+
+
+class ResidualBlock(Module):
+    """Represents 1D version of the residual block: https://arxiv.org/abs/1512.03385"""
+
+    def __init__(self, input_dim):
+        """Initializes the module."""
+        super(ResidualBlock, self).__init__()
+        self.block = Sequential(
+            Linear(input_dim, input_dim),
+            LeakyReLU(),
+            Linear(input_dim, input_dim),
+        )
+
+    def forward(self, x):
+        """Performs forward pass of the module."""
+        skip_connection = x
+        x = self.block(x)
+        x = skip_connection + x
+        return x
+
 
 class PositionalEncodingLayer(Module):
 
@@ -239,12 +260,30 @@ class DecoderBlock(Module):
 
 class Decoder(Module):
 
-    def __init__(self, vocab_size: int, embedding_dim: int, n_blocks: int, n_heads: int, device=torch.device("cpu")) -> None:
+    def __init__(self, vocab_size: int, img_feature_channels: int, embedding_dim: int, n_blocks: int, n_heads: int, device=torch.device("cpu")) -> None:
         super().__init__()
         
-        self.embedding_layer = Embedding(vocab_size + 1, embedding_dim, padding_idx=vocab_size)
+        self.entry_mapping_img = Linear(img_feature_channels, embedding_dim)
+        self.res_block = ResidualBlock(embedding_dim)
+
+        word_embeddings = torch.Tensor(np.loadtxt("embeddings.txt"))
+        self.embedding_layer = torch.nn.Embedding.from_pretrained(
+            word_embeddings,
+            freeze=True,
+            padding_idx=0
+        )
+
+        # self.embedding_layer = Embedding(vocab_size + 1, embedding_dim, padding_idx=vocab_size)
         self.position_encoding = PositionalEncodingLayer(embedding_dim, device)
         self.blocks = ModuleList([DecoderBlock(embedding_dim, n_heads) for _ in range(n_blocks)])
+
+        # transformer_decoder_layer = torch.nn.TransformerDecoderLayer(
+        #     d_model=embedding_dim,
+        #     nhead=n_heads,
+        #     dim_feedforward=1024,
+        #     dropout=0.5
+        # )
+        # self.decoder = torch.nn.TransformerDecoder(transformer_decoder_layer, n_blocks)
 
         self.linear = Linear(embedding_dim, vocab_size + 1)
         self.softmax = Softmax(-1)
@@ -283,10 +322,10 @@ class Decoder(Module):
         seq_length = target.shape[1]
         mask = self._lookahead_mask(seq_length).to(self.device)
         bs, source_seq_length, _ = encoded_source.shape
+        encoded_source = self.entry_mapping_img(encoded_source)
+        encoded_source = torch.nn.functional.leaky_relu(encoded_source)
 
         # Padding masks
-        # target_padding = torch.where(target == self.vocab_size, torch.zeros_like(target, dtype=torch.float64), 
-        #                              torch.ones_like(target, dtype=torch.float64))
         target_padding = torch.where(target == 0, torch.zeros_like(target, dtype=torch.float32), 
                                      torch.ones_like(target, dtype=torch.float32))
         target_padding_mask = torch.einsum("bi,bj->bij", (target_padding, target_padding)).to(self.device)
@@ -304,9 +343,18 @@ class Decoder(Module):
             target, att = block(encoded_source, target, mask1, source_target_padding_mask)
             if att_weights is None:
                 att_weights = att
+        
+        # target = self.decoder(
+        #     tgt=target.permute(1, 0, 2),
+        #     memory=encoded_source.permute(1, 0, 2),
+        #     tgt_key_padding_mask=target_padding.bool(),
+        #     tgt_mask=mask.bool()
+        # )
+        # y = self.linear(target.permute(1, 0, 2))
 
         y = self.linear(target)
         return y, att_weights
+        # return y, _
 
 
 class Transformer(Module):

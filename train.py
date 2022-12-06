@@ -13,9 +13,11 @@ from nltk.translate.bleu_score import corpus_bleu
 import transformer
 
 # Data parameters
-data_folder = 'flickr30k_output'  # folder with data files saved by create_input_files.py
+# data_folder = 'flickr30k_output'  # folder with data files saved by create_input_files.py
+data_folder = 'flickr8k_output'
 # data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
-data_name = 'flickr30k_5_cap_per_img_5_min_word_freq'
+# data_name = 'flickr30k_5_cap_per_img_5_min_word_freq'
+data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
 emb_dim = 512  # dimension of word embeddings
@@ -26,23 +28,26 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # 
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 encoded_image_size = 8
-embedding_dim = 2048 # Resnet 101 [:-2] layer output dim
-vocab_size = 7003 # Vocab size for flickr
+img_feature_channels = 2048 # Resnet 101 [:-2] layer output dim
+embedding_dim = 100
 num_decoder_blocks = 3
-num_decoder_heads = 2
+num_decoder_heads = 5
+gradient_clipping = 2.0
 
 # Training parameters
 start_epoch = 0
-epochs = 120  # number of epochs to train for (if early stopping is not triggered)
+epochs = 60  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
 batch_size = 32
 workers = 0  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
-decoder_lr = 4e-4  # learning rate for decoder
+# decoder_lr = 4e-4  # learning rate for decoder
+decoder_lr = 0.00001
+weight_decay = 0.5
 grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
-print_freq = 1  # print training/validation stats every __ batches
+print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = None  # path to checkpoint, None if none
 
@@ -58,6 +63,7 @@ def main():
     word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
     with open(word_map_file, 'r') as j:
         word_map = json.load(j)
+    print(len(word_map))
 
     # Initialize / load checkpoint
     if checkpoint is None:
@@ -72,8 +78,8 @@ def main():
         #                                dropout=dropout)
         # decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
         #                                      lr=decoder_lr)
-        decoder = transformer.Decoder(vocab_size, embedding_dim, num_decoder_blocks, num_decoder_heads, device=device)
-        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=decoder_lr)
+        decoder = transformer.Decoder(len(word_map), img_feature_channels, embedding_dim, num_decoder_blocks, num_decoder_heads, device=device)
+        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=decoder_lr, weight_decay=weight_decay)
 
     else:
         checkpoint = torch.load(checkpoint)
@@ -171,6 +177,9 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
     # Batches
     for i, (imgs, caps, caplens) in enumerate(train_loader):
+        if i == len(train_loader) - 1:
+            break
+
         data_time.update(time.time() - start)
 
         # Move to GPU, if available
@@ -179,30 +188,27 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         caplens = caplens.to(device)
 
         # Forward prop.
-        encoder_out = encoder(imgs) # (batch_size, encoded_image_size, encoded_image_size, 2048)
-        # scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(imgs, caps, caplens)
-        encoder_out = encoder_out.view(batch_size, -1, embedding_dim) 
+        with torch.no_grad():
+            encoder_out = encoder(imgs)
+            encoder_out = encoder_out.reshape(batch_size, -1, encoder_out.shape[-1]) 
+            encoder_out = encoder_out.detach()
+
         pred, alphas = decoder(encoder_out, None, caps)
+        pred = pred[:, :-1, :]
+        caps = caps[:, 1:]
 
-        # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
-        # targets = caps_sorted[:, 1:]
-
-        # Remove timesteps that we didn't decode at, or are pads
-        # pack_padded_sequence is an easy trick to do this
+        tgt_padding_mask = torch.where(caps == 0, torch.zeros_like(caps, dtype=torch.float32), torch.ones_like(caps, dtype=torch.float32)).bool()
 
         # Calculate loss
-        # loss = criterion(scores, targets)
-        # pred = pred[:, :-1, :].transpose(1, 2)
-        loss = criterion(pred[:, :-1, :].transpose(1, 2), caps[:, 1:])
-
-        # Add doubly stochastic attention regularization
-        # loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
-
+        loss = criterion(pred[tgt_padding_mask], caps[tgt_padding_mask])
+        
         # Back prop.
         decoder_optimizer.zero_grad()
         if encoder_optimizer is not None:
             encoder_optimizer.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(decoder.parameters(), gradient_clipping)
 
         # Clip gradients
         # if grad_clip is not None:
@@ -217,9 +223,8 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
         # Keep track of metrics
         decode_lengths = (caplens.squeeze(1) - 1).tolist()
-        print(len(decode_lengths), pred.shape)
-        scores = pack_padded_sequence(pred, decode_lengths, batch_first=True, enforce_sorted=False)
-        targets = pack_padded_sequence(caps, decode_lengths, batch_first=True, enforce_sorted=False)
+        scores = pack_padded_sequence(pred, decode_lengths, batch_first=True, enforce_sorted=False).data
+        targets = pack_padded_sequence(caps, decode_lengths, batch_first=True, enforce_sorted=False).data
         top5 = accuracy(scores, targets, 5)
         losses.update(loss.item(), sum(decode_lengths))
         top5accs.update(top5, sum(decode_lengths))
@@ -237,7 +242,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                                                                           batch_time=batch_time,
                                                                           data_time=data_time, loss=losses,
                                                                           top5=top5accs))
-
+                                                                    
 
 def validate(val_loader, encoder, decoder, criterion):
     """
@@ -267,7 +272,9 @@ def validate(val_loader, encoder, decoder, criterion):
     with torch.no_grad():
         # Batches
         for i, (imgs, caps, caplens, allcaps) in enumerate(val_loader):
-
+            if i == len(val_loader) - 1:
+                break
+            
             # Move to device, if available
             imgs = imgs.to(device)
             caps = caps.to(device)
@@ -275,23 +282,28 @@ def validate(val_loader, encoder, decoder, criterion):
 
             # Forward prop.
             if encoder is not None:
-                imgs = encoder(imgs)
-            scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(imgs, caps, caplens)
+                encoder_out = encoder(imgs)
+            encoder_out = encoder_out.reshape(batch_size, -1, encoder_out.shape[-1])
+            pred, alphas = decoder(encoder_out, None, caps)
+            pred = pred[:, :-1, :]
+            caps = caps[:, 1:]
+
+            tgt_padding_mask = torch.where(caps == 0, torch.zeros_like(caps, dtype=torch.float32), torch.ones_like(caps, dtype=torch.float32)).bool()
+            # Calculate loss
+            loss = criterion(pred[tgt_padding_mask], caps[tgt_padding_mask])
 
             # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
-            targets = caps_sorted[:, 1:]
+            # targets = caps_sorted[:, 1:]
 
             # Remove timesteps that we didn't decode at, or are pads
             # pack_padded_sequence is an easy trick to do this
-            scores_copy = scores.clone()
-            scores, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True)
-            targets, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
-
-            # Calculate loss
-            loss = criterion(scores, targets)
+            scores_copy = pred.clone()
+            decode_lengths = (caplens.squeeze(1) - 1).tolist()
+            scores = pack_padded_sequence(scores_copy, decode_lengths, batch_first=True, enforce_sorted=False)
+            targets = pack_padded_sequence(caps, decode_lengths, batch_first=True, enforce_sorted=False)
 
             # Add doubly stochastic attention regularization
-            loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
+            # loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
             # Keep track of metrics
             losses.update(loss.item(), sum(decode_lengths))
@@ -313,24 +325,56 @@ def validate(val_loader, encoder, decoder, criterion):
             # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
 
             # References
-            allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
-            for j in range(allcaps.shape[0]):
-                img_caps = allcaps[j].tolist()
-                img_captions = list(
-                    map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>']}],
-                        img_caps))  # remove <start> and pads
-                references.append(img_captions)
+            # allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
+            # for j in range(allcaps.shape[0]):
+            #     img_caps = allcaps[j].tolist()
+            #     img_captions = list(
+            #         map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>']}],
+            #             img_caps))  # remove <start> and pads
+            #     references.append(img_captions)
+            
+            # # Hypotheses
+            # _, preds = torch.max(scores_copy, dim=2)
+            # preds = preds.tolist()
+            # temp_preds = list()
+            # for j, p in enumerate(preds):
+            #     temp_preds.append(preds[j][:decode_lengths[j]])  # remove pads
+            # preds = temp_preds
+            # hypotheses.extend(preds)
 
-            # Hypotheses
-            _, preds = torch.max(scores_copy, dim=2)
-            preds = preds.tolist()
-            temp_preds = list()
-            for j, p in enumerate(preds):
-                temp_preds.append(preds[j][:decode_lengths[j]])  # remove pads
-            preds = temp_preds
-            hypotheses.extend(preds)
+            # assert len(references) == len(hypotheses)
 
-            assert len(references) == len(hypotheses)
+
+            rev_word_map = {v: k for k, v in word_map.items()} 
+            # for i in range(len(references)):
+            #     ref, hyp = references[i], hypotheses[i]
+            #     for i in range(len(ref)):
+            #         ref_words = [rev_word_map[ind] for ind in ref[i]]
+            #         print("REF", ref_words)
+                
+            #     hyp_words = [rev_word_map[ind] for ind in pred]
+            #     print("Hyp", hyp_words)
+
+            # for i in range(encoder_out.shape[0]):
+            #     pred, _ = predict(decoder, encoder_out[i].reshape(1, encoder_out.shape[1], encoder_out.shape[2]), 2, 22)
+            #     hypotheses.append(pred)
+            #     if i == 0:
+            #         ref_words = [rev_word_map[int(ind)] for ind in caps[0]]
+            #         hyp_words = [rev_word_map[int(ind)] for ind in pred]
+            #         print("REF", ref_words)
+            #         print("HYP", hyp_words)
+            captions = [[rev_word_map[int(ind)] for ind in cap] for cap in caps]
+            references.extend(captions)
+            pred = greedy_decoding(decoder, encoder_out, 2631, 2632, 0, rev_word_map, 22, device)
+            hypotheses.extend(pred)
+            if i == 0:
+                print("Ref 0", captions[0])
+                print("Pred 0", pred[0])
+                print("Ref 1", captions[1])
+                print("Pred 1", pred[1])
+                print("Ref 2", captions[2])
+                print("Pred 2", pred[2])
+
 
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypotheses)
@@ -342,6 +386,143 @@ def validate(val_loader, encoder, decoder, criterion):
                 bleu=bleu4))
 
     return bleu4
+
+
+def predict(decoder, source_input, beam_size=1, max_length=12):
+        """
+        Given a sentence in the source language, you should output a sentence in the target
+        language of length at most `max_length` that you generate using a beam search with
+        the given `beam_size`.
+
+        Note that the start of sentence token is 0 and the end of sentence token is 1.
+
+        Return the final top beam (decided using average log-likelihood) and its average
+        log-likelihood.
+        """
+        decoder.eval()
+
+        logits, _ = decoder(source_input, None, torch.tensor([2631], dtype=torch.int32).to(device).reshape(1, -1))
+        log_prob = torch.log(torch.nn.functional.softmax(logits.detach()[0][-1]))
+        top_probs, top_indices = torch.topk(log_prob, beam_size)
+        targets = []
+        prob_sums = []
+        final = []
+        final_prob_sums = []
+        for i in range(beam_size):
+            token = top_indices[i]
+            if token == 2632: # end token
+                final.append(torch.tensor([2631, token]))
+                final_prob_sums.append(top_probs[i])
+            else:
+                targets.append(torch.tensor([2631, token]))
+                prob_sums.append(top_probs[i])
+        beam_size -= len(final)
+        
+        for itr in range(2, max_length):
+            log_prob_beams = []
+            log_prob_beams_norm = []
+            for i in range(beam_size):
+                logits, _ = decoder(source_input, None, torch.tensor(targets[i]).to(device).view(1, -1))
+                log_prob = torch.log(torch.nn.functional.softmax(logits.detach()[0][-1]))
+                log_prob_beams.append(log_prob)
+                log_prob_beams_norm.append((log_prob + prob_sums[i]) / (len(targets[i]) + 1))
+            log_prob_beams = torch.cat(log_prob_beams)
+            log_prob_beams_norm = torch.cat(log_prob_beams_norm)
+            top_probs, top_indices = torch.topk(log_prob_beams_norm, beam_size)
+            new_targets = []
+            new_prob_sums = []
+            for i in range(beam_size):
+                token = top_indices[i] % (decoder.vocab_size + 1)
+                prev_idx = top_indices[i] // (decoder.vocab_size + 1)
+                if token == 2632: # end token
+                    final.append(torch.cat((targets[prev_idx], torch.tensor([token]))))
+                    final_prob_sums.append(prob_sums[prev_idx] + log_prob_beams[top_indices[i]])
+                else:
+                    new_targets.append(torch.cat((targets[prev_idx], torch.tensor([token]))))
+                    new_prob_sums.append(prob_sums[prev_idx] + log_prob_beams[top_indices[i]])
+            beam_size -= len(targets) - len(new_targets)
+            targets = new_targets
+            prob_sums = new_prob_sums
+            if beam_size == 0:
+                break
+            
+        for i in range(beam_size):
+            final.append(targets[i])
+            final_prob_sums.append(prob_sums[i])
+        final_prob_sums = [prob.to(torch.device("cpu")) for prob in final_prob_sums]
+        final_prob_avg = np.array(final_prob_sums) / np.array([len(final[i]) for i in range(len(final))])
+        best_idx = np.argmax(final_prob_avg) 
+        return final[best_idx], final_prob_avg[best_idx]
+
+
+def greedy_decoding(model, img_features_batched, sos_id, eos_id, pad_id, idx2word, max_len, device):
+    """Performs greedy decoding for the caption generation.
+    At each iteration model predicts the next word in the caption given the previously
+    generated words and image features. For the next word we always take the most probable one.
+    Arguments:
+        model (torch.nn.Module): Transformer Decoder model which generates prediction for the next word
+        img_features_padded (torch.Tensor): Image features generated by CNN encoder
+            Stacked along 0-th dimension for each image in the mini-batch
+        sos_id (int): Id of <start> token in the vocabulary
+        eos_id (int): Id of <end> token in the vocabulary
+        pad_id (int): Id of <pad> token in the vocabulary
+        idx2word (dict): Mapping from ordinal number of token (i.e. class number) to the string of word
+        max_len (int): Maximum length of the caption
+        device (torch.device): Device on which to port used tensors
+    Returns:
+        generated_captions (list of str): Captions generated for each image in the batch
+    """
+    batch_size = img_features_batched.size(0)
+
+    # Define the initial state of decoder input
+    x_words = torch.Tensor([sos_id] + [pad_id] * (max_len - 1)).to(device).long()
+    x_words = x_words.repeat(batch_size, 1)
+    padd_mask = torch.Tensor([True] * max_len).to(device).bool()
+    padd_mask = padd_mask.repeat(batch_size, 1)
+
+    # Is each image from the batch decoded
+    is_decoded = [False] * batch_size
+    generated_captions = []
+    for _ in range(batch_size):
+        generated_captions.append([])
+
+    for i in range(max_len - 1):
+        # Update the padding masks
+        padd_mask[:, i] = False
+
+        # Get the model prediction for the next word
+        y_pred_prob, _ = model(img_features_batched, None, x_words)
+        # Extract the prediction from the specific (next word) position of the target sequence
+        y_pred_prob = y_pred_prob[torch.arange(batch_size), [i] * batch_size].clone()
+        # Extract the most probable word
+        y_pred = y_pred_prob.argmax(-1)
+        
+        for batch_idx in range(batch_size):
+            if is_decoded[batch_idx]:
+                continue
+            # Add the generated word to the caption
+            generated_captions[batch_idx].append(idx2word[y_pred[batch_idx].item()])
+            if y_pred[batch_idx] == eos_id:
+                # Caption has been fully generated for this image
+                is_decoded[batch_idx] = True
+            
+        if np.all(is_decoded):
+            break
+
+        if i < (max_len - 1):   # We haven't reached maximum number of decoding steps
+            # Update the input tokens for the next iteration
+            x_words[torch.arange(batch_size), [i+1] * batch_size] = y_pred.view(-1)
+
+    # Complete the caption for images which haven't been fully decoded
+    for batch_idx in range(batch_size):
+        if not is_decoded[batch_idx]:
+            generated_captions[batch_idx].append(idx2word[eos_id])
+
+    # Clean the EOS symbol
+    for caption in generated_captions:
+        caption.remove("<end>")
+
+    return generated_captions
 
 
 if __name__ == '__main__':

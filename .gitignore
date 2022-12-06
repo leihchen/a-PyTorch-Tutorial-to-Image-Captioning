@@ -3,3 +3,10 @@
 caption_datasets/
 flickr30k_images/
 flickr30k_output/
+flickr8k_images/
+flickr8k_output/
+ckpt*/
+checkpoints/
+.idea/
+glove_embeddings/
+img/

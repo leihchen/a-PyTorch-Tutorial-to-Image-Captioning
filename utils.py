@@ -207,8 +207,8 @@ def clip_gradient(optimizer, grad_clip):
                 param.grad.data.clamp_(-grad_clip, grad_clip)
 
 
-def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer, decoder_optimizer,
-                    bleu4, is_best):
+def save_checkpoint(dir_prefix, data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_opt, decoder_opt, bleu1, bleu2, bleu3, bleu4, is_best, 
+                        learning_rate, patch_size, embed_dim, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout):
     """
     Saves model checkpoint.
 
@@ -224,16 +224,102 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
     """
     state = {'epoch': epoch,
              'epochs_since_improvement': epochs_since_improvement,
+             'bleu-1': bleu1,
+             'bleu-2': bleu2,
+             'bleu-3': bleu3,
              'bleu-4': bleu4,
              'encoder': encoder,
              'decoder': decoder,
-             'encoder_optimizer': encoder_optimizer,
-             'decoder_optimizer': decoder_optimizer}
+             'encoder_optimizer': encoder_opt,
+             'decoder_optimizer': decoder_opt,
+             'learning_rate': learning_rate,
+             'patch_size': patch_size,
+             'embed_dim': embed_dim,
+             'nhead': nhead,
+             'num_encoder_layers': num_encoder_layers,
+             'num_decoder_layers': num_decoder_layers,
+             'dim_feedforward': dim_feedforward,
+             'dropout': dropout}
     filename = 'checkpoint_' + data_name + '.pth.tar'
+    torch.save(state, dir_prefix + filename)
+    # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
+    if is_best:
+        torch.save(state, dir_prefix + 'BEST_' + filename)
+
+def save_checkpoint_new(dir_prefix, data_name, epoch, epochs_since_improvement, model, opt, bleu1, bleu2, bleu3, bleu4, is_best, 
+                        learning_rate, patch_size, embed_dim, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout):
+    """
+    Saves model checkpoint.
+
+    :param data_name: base name of processed dataset
+    :param epoch: epoch number
+    :param epochs_since_improvement: number of epochs since last improvement in BLEU-4 score
+    :param encoder: encoder model
+    :param decoder: decoder model
+    :param encoder_optimizer: optimizer to update encoder's weights, if fine-tuning
+    :param decoder_optimizer: optimizer to update decoder's weights
+    :param bleu4: validation BLEU-4 score for this epoch
+    :param is_best: is this checkpoint the best so far?
+    """
+    state = {'epoch': epoch,
+             'epochs_since_improvement': epochs_since_improvement,
+             'bleu-1': bleu1,
+             'bleu-2': bleu2,
+             'bleu-3': bleu3,
+             'bleu-4': bleu4,
+             'model': model,
+             'optimizer': opt,
+             'learning_rate': learning_rate,
+             'patch_size': patch_size,
+             'embed_dim': embed_dim,
+             'nhead': nhead,
+             'num_encoder_layers': num_encoder_layers,
+             'num_decoder_layers': num_decoder_layers,
+             'dim_feedforward': dim_feedforward,
+             'dropout': dropout}
+                        
+    filename = 'new_checkpoint_' + data_name + '.pth.tar'
+    torch.save(state, dir_prefix + filename)
+    # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
+    if is_best:
+        torch.save(state, dir_prefix +'new_BEST_' + filename)
+
+def save_checkpoint_test(data_name, epoch, epochs_since_improvement, model, opt, bleu1, bleu2, bleu3, bleu4, is_best, 
+                        learning_rate, patch_size, embed_dim, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout):
+    """
+    Saves model checkpoint.
+
+    :param data_name: base name of processed dataset
+    :param epoch: epoch number
+    :param epochs_since_improvement: number of epochs since last improvement in BLEU-4 score
+    :param encoder: encoder model
+    :param decoder: decoder model
+    :param encoder_optimizer: optimizer to update encoder's weights, if fine-tuning
+    :param decoder_optimizer: optimizer to update decoder's weights
+    :param bleu4: validation BLEU-4 score for this epoch
+    :param is_best: is this checkpoint the best so far?
+    """
+    state = {'epoch': epoch,
+             'epochs_since_improvement': epochs_since_improvement,
+             'bleu-1': bleu1,
+             'bleu-2': bleu2,
+             'bleu-3': bleu3,
+             'bleu-4': bleu4,
+             'model': model,
+             'optimizer': opt,
+             'learning_rate': learning_rate,
+             'patch_size': patch_size,
+             'embed_dim': embed_dim,
+             'nhead': nhead,
+             'num_encoder_layers': num_encoder_layers,
+             'num_decoder_layers': num_decoder_layers,
+             'dim_feedforward': dim_feedforward,
+             'dropout': dropout}
+    filename = 'test_checkpoint_' + data_name + '.pth.tar'
     torch.save(state, filename)
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        torch.save(state, 'BEST_' + filename)
+        torch.save(state, 'test_BEST_' + filename)
 
 
 class AverageMeter(object):
@@ -281,11 +367,9 @@ def accuracy(scores, targets, k):
     :return: top-k accuracy
     """
     scores, targets = scores.data, targets.data
-    print(scores.shape, targets.shape)
     batch_size = targets.size(0)
     _, ind = scores.topk(k, 1, True, True)
     ind = ind.view(-1,k) # 704 x 5, target: 704 x 5
     correct = ind.eq(targets.view(-1, 1).expand_as(ind))
     correct_total = correct.view(-1).float().sum()  # 0D tensor
-    print(correct_total)
     return correct_total.item() * (100.0 / batch_size)
