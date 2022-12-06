@@ -18,17 +18,22 @@ data_folder = 'flickr8k_output'
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
+device = torch.device("cpu")
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+print("DEVICE:", device)
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 encoded_image_size = 8
-learning_rate = 0.00001
+learning_rate = 0.0001
 patch_size=8
 embed_dim=128
 max_len=22
-nhead=4
-num_encoder_layers=8
-num_decoder_layers=8
+nhead=8
+num_encoder_layers=4
+num_decoder_layers=4
 dim_feedforward=512
 dropout=0.1
 
@@ -36,12 +41,12 @@ dropout=0.1
 start_epoch = 0
 epochs = 30  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 32
+batch_size = 16
 workers = 0  # for data-loading; right now, only 1 works with h5py
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 checkpoint = None  # path to checkpoint, None if none
-ckpt_dir_prefix = "ckpt_4_8_8/"
+ckpt_dir_prefix = "ckpt_8_4_4/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
 # checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
@@ -61,8 +66,8 @@ def main():
     # Initialize / load checkpoint
     if checkpoint is None:
         model = ImageTransformer(len_vocab=len(word_map), img_size=256, patch_size=patch_size, in_chans=3, embed_dim=embed_dim, max_len=max_len, 
-                                nhead=nhead, num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers, 
-                                dim_feedforward=dim_feedforward, dropout=dropout, device=torch.device("mps"))
+                                nhead=nhead, num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
+                                dim_feedforward=dim_feedforward, dropout=dropout, device=device)
         model = model.to(device)
         optimizer = model.configure_optimizers(lr=learning_rate)
     else:

@@ -13,7 +13,6 @@ import torch
 from torch.nn import Module, Linear, Softmax, ReLU, LayerNorm, ModuleList, Dropout, Embedding, CrossEntropyLoss
 from torch.optim import Adam
 
-import pytorch_lightning as pl
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -36,34 +35,26 @@ class PatchEmbedding(Module):
         return x
 
 
-class PositionalEncodingLayer(Module):
+class PositionalEncoding(nn.Module):
 
-    def __init__(self, embedding_dim: int, device=torch.device("cpu")) -> None:
+    def __init__(self, d_model: int, device = torch.device("cpu"), dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
-        self.embedding_dim = embedding_dim
-        self.device = device
+        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model).to(device)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        X has shape (batch_size, sequence_length, embedding_dim)
-
-        This function should create the positional encoding matrix
-        and return the sum of X and the encoding matrix.
-
-        The positional encoding matrix is defined as follow:
-
-        P_(pos, 2i) = sin(pos / (10000 ^ (2i / d)))
-        P_(pos, 2i + 1) = cos(pos / (10000 ^ (2i / d)))
-
-        The output will have shape (batch_size, sequence_length, embedding_dim)
+        Args:
+            x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
-        T = X.shape[1]
-        pos = torch.arange(T).reshape(-1, 1)
-        div = torch.exp(torch.arange(0, self.embedding_dim, 2) / self.embedding_dim * -math.log(10000))
-        pos_enc = torch.zeros(T, self.embedding_dim).to(self.device)
-        pos_enc[:, 0::2] = torch.sin(pos * div)
-        pos_enc[:, 1::2] = torch.cos(pos * div)
-        return X + torch.broadcast_to(pos_enc.reshape(1, T, self.embedding_dim), (X.shape[0], T, self.embedding_dim))
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
 
 
 class ImageTransformer(Module):
@@ -89,7 +80,7 @@ class ImageTransformer(Module):
         
         self.patch_embed = PatchEmbedding(img_size, patch_size, in_chans, embed_dim)
         # self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
-        self.pos_embed = PositionalEncodingLayer(embed_dim, device=device)
+        self.pos_embed = PositionalEncoding(embed_dim, device=device)
         
         self.trg_emb = nn.Embedding(len_vocab, embed_dim)
         self.trg_pos_emb = nn.Embedding(max_len, embed_dim)
@@ -107,6 +98,7 @@ class ImageTransformer(Module):
     def forward(self, images, captions):
         # embed images
         embed_imgs = self.patch_embed(images)
+        # embed_imgs = embed_imgs + self.pos_embed
         embed_imgs = self.pos_embed(embed_imgs)
         # embed captions
         B, trg_seq_len = captions.shape
