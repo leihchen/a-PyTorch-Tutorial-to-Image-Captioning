@@ -20,19 +20,19 @@ data_folder = 'flickr8k_output'
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-emb_dim = 512  # dimension of word embeddings
-attention_dim = 512  # dimension of attention linear layers
-decoder_dim = 512  # dimension of decoder RNN
-dropout = 0.5
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 encoded_image_size = 8
 img_feature_channels = 2048 # Resnet 101 [:-2] layer output dim
-embedding_dim = 100
-num_decoder_blocks = 3
-num_decoder_heads = 5
+embed_dim = 100
 gradient_clipping = 2.0
+learning_rate = 0.0001
+max_len=22
+nhead=3
+num_decoder_layers=5
+# dim_feedforward=512
+dropout=0.1
 
 # Training parameters
 start_epoch = 0
@@ -42,14 +42,18 @@ batch_size = 32
 workers = 0  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 # decoder_lr = 4e-4  # learning rate for decoder
-decoder_lr = 0.00001
+decoder_lr = 0.0001
 weight_decay = 0.5
 grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
-print_freq = 100  # print training/validation stats every __ batches
+print_freq = 10  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+ckpt_dir_prefix = f"ckpt_decoder_only_{nhead}_{num_decoder_layers}/"
+if not os.path.exists(ckpt_dir_prefix):
+   os.makedirs(ckpt_dir_prefix)
+checkpoint = None 
+# checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
 def main():
@@ -71,21 +75,17 @@ def main():
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
-        # decoder = DecoderWithAttention(attention_dim=attention_dim,
-        #                                embed_dim=emb_dim,
-        #                                decoder_dim=decoder_dim,
-        #                                vocab_size=len(word_map),
-        #                                dropout=dropout)
-        # decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
-        #                                      lr=decoder_lr)
-        decoder = transformer.Decoder(len(word_map), img_feature_channels, embedding_dim, num_decoder_blocks, num_decoder_heads, device=device)
-        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=decoder_lr, weight_decay=weight_decay)
-
+        decoder = transformer.Decoder(len(word_map), img_feature_channels, embed_dim, num_decoder_layers, nhead, device=device)
+        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=learning_rate, weight_decay=weight_decay)
     else:
         checkpoint = torch.load(checkpoint)
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
-        best_bleu4 = checkpoint['bleu-4']
+        bleu1 = checkpoint['bleu-1']
+        bleu2 = checkpoint['bleu-2']
+        bleu3 = checkpoint['bleu-3']
+        bleu4 = checkpoint['bleu-4']
+        # best_bleu4 = checkpoint['bleu-4']
         decoder = checkpoint['decoder']
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
@@ -133,10 +133,10 @@ def main():
               epoch=epoch)
 
         # One epoch's validation
-        recent_bleu4 = validate(val_loader=val_loader,
-                                encoder=encoder,
-                                decoder=decoder,
-                                criterion=criterion)
+        recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4 = validate(val_loader=val_loader,
+                                                                            encoder=encoder,
+                                                                            decoder=decoder,
+                                                                            criterion=criterion)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -148,8 +148,10 @@ def main():
             epochs_since_improvement = 0
 
         # Save checkpoint
-        save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
-                        decoder_optimizer, recent_bleu4, is_best)
+        save_checkpoint_new(ckpt_dir_prefix, data_name, epoch, epochs_since_improvement, decoder, decoder_optimizer, 
+                            recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4, is_best, 
+                            learning_rate, None, embed_dim, nhead, None,
+                            num_decoder_layers, None, dropout)
 
 
 def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):

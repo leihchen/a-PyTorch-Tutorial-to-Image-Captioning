@@ -22,13 +22,13 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # 
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 encoded_image_size = 8
-learning_rate = 0.00001
+learning_rate = 0.0001
 patch_size=8
-embed_dim=128
+embed_dim=120
 max_len=22
-nhead=4
-num_encoder_layers=8
-num_decoder_layers=8
+nhead=3
+num_encoder_layers=2
+num_decoder_layers=2
 dim_feedforward=512
 dropout=0.1
 
@@ -40,10 +40,10 @@ batch_size = 32
 workers = 0  # for data-loading; right now, only 1 works with h5py
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-checkpoint = None  # path to checkpoint, None if none
-ckpt_dir_prefix = "ckpt_4_8_8/"
+ckpt_dir_prefix = f"ckpt_{nhead}_{num_encoder_layers}_{num_decoder_layers}/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
+checkpoint = None 
 # checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
@@ -78,6 +78,9 @@ def main():
         model = checkpoint['model']
         model = model.to(device)
         optimizer = checkpoint['optimizer']
+        # print(checkpoint["epoch"])
+        # return
+        
 
 
     # Custom dataloaders

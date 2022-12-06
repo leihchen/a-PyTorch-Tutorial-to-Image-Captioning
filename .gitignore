@@ -5,7 +5,7 @@ flickr30k_images/
 flickr30k_output/
 flickr8k_images/
 flickr8k_output/
-ckpt*/
+*ckpt*/
 checkpoints/
 .idea/
 glove_embeddings/
