@@ -14,12 +14,13 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.enc_image_size = encoded_image_size
 
-        resnet, _ = clip.load('RN50', device="cpu", jit=False)  # pretrained ImageNet ResNet-101
+        resnet, preprocess = clip.load('ViT-B/32', device="cpu", jit=False)  # pretrained ImageNet ResNet-101
 
         # Remove linear and pool layers (since we're not doing classification)
-        modules = list(list(resnet.children())[0].children())[:-1]
+        modules = list(resnet.visual.children())
+        self.clip = resnet
         self.resnet = nn.Sequential(*modules)
-
+        self.preprocess = preprocess
         # Resize image to fixed size to allow input images of variable size
         self.adaptive_pool = nn.AdaptiveAvgPool2d((encoded_image_size, encoded_image_size))
 
@@ -32,8 +33,10 @@ class Encoder(nn.Module):
         :param images: images, a tensor of dimensions (batch_size, 3, image_size, image_size)
         :return: encoded images
         """
-        out = self.resnet(images)  # (batch_size, 2048, image_size/32, image_size/32)
-        out = self.adaptive_pool(out)  # (batch_size, 2048, encoded_image_size, encoded_image_size)
+        t = torchvision.transforms.ToPILImage()
+        processed = torch.stack([self.preprocess(t(image)) for image in images], dim=0)
+        out = self.clip.encode_image(processed).unsqueeze(-1).unsqueeze(-1)  # (batch_size, 2048, image_size/32, image_size/32)
+        # out = self.adaptive_pool(out)  # (batch_size, 2048, encoded_image_size, encoded_image_size)
         out = out.permute(0, 2, 3, 1)  # (batch_size, encoded_image_size, encoded_image_size, 2048)
         return out
 
@@ -91,7 +94,7 @@ class DecoderWithAttention(nn.Module):
     Decoder.
     """
 
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5):
+    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=512, dropout=0.5):
         """
         :param attention_dim: size of attention network
         :param embed_dim: embedding size
