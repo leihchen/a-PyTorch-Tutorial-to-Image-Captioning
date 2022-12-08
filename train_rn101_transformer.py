@@ -13,10 +13,7 @@ from nltk.translate.bleu_score import corpus_bleu
 import transformer
 
 # Data parameters
-# data_folder = 'flickr30k_output'  # folder with data files saved by create_input_files.py
 data_folder = 'flickr8k_output'
-# data_name = 'coco_5_cap_per_img_5_min_word_freq'  # base name shared by data files
-# data_name = 'flickr30k_5_cap_per_img_5_min_word_freq'
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
@@ -24,7 +21,13 @@ emb_dim = 512  # dimension of word embeddings
 attention_dim = 512  # dimension of attention linear layers
 decoder_dim = 512  # dimension of decoder RNN
 dropout = 0.5
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
+
+device = torch.device("cpu")
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+print("DEVICE:", device)
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 encoded_image_size = 8
@@ -33,13 +36,13 @@ embedding_dim = 100
 
 learning_rate = 0.0001
 patch_size=16
-embed_dim=100
+embed_dim=128
 max_len=22
-nhead=5
-num_encoder_layers=3
-num_decoder_layers=5
-dim_feedforward=400
-dropout=0.1
+nhead=8
+num_encoder_layers=4
+num_decoder_layers=4
+dim_feedforward=1024
+dropout=0.5
 
 # Training parameters
 start_epoch = 0
@@ -53,8 +56,10 @@ best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 
-ckpt_dir_prefix = "ckpt_rn101_trans_5_3_5/"
-checkpoint = None  # path to checkpoint, None if none
+ckpt_dir_prefix = f"ckpt_rn_transformer_{nhead}_{num_decoder_layers}_1024_0.5/"
+if not os.path.exists(ckpt_dir_prefix):
+   os.makedirs(ckpt_dir_prefix)
+checkpoint = None 
 # checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
