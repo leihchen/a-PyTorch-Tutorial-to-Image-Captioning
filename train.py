@@ -20,19 +20,19 @@ data_folder = 'flickr8k_output'
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
 
 # Model parameters
-emb_dim = 512  # dimension of word embeddings
-attention_dim = 512  # dimension of attention linear layers
-decoder_dim = 512  # dimension of decoder RNN
-dropout = 0.5
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
-encoded_image_size = 8
+encoded_image_size = 16
 img_feature_channels = 2048 # Resnet 101 [:-2] layer output dim
-embedding_dim = 100
-num_decoder_blocks = 3
-num_decoder_heads = 5
+embed_dim = 100
 gradient_clipping = 2.0
+learning_rate = 0.00008
+max_len=22
+nhead=6
+num_decoder_layers=5
+# dim_feedforward=512
+dropout=0.1
 
 # Training parameters
 start_epoch = 0
@@ -42,14 +42,18 @@ batch_size = 32
 workers = 0  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 # decoder_lr = 4e-4  # learning rate for decoder
-decoder_lr = 0.00001
+# decoder_lr = 0.0005
 weight_decay = 0.5
 grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
-print_freq = 100  # print training/validation stats every __ batches
+print_freq = 10  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = None  # path to checkpoint, None if none
+ckpt_dir_prefix = f"ckpt_decoder_only_{nhead}_{num_decoder_layers}/"
+if not os.path.exists(ckpt_dir_prefix):
+   os.makedirs(ckpt_dir_prefix)
+checkpoint = None 
+# checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
 def main():
@@ -71,21 +75,17 @@ def main():
         encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
-        # decoder = DecoderWithAttention(attention_dim=attention_dim,
-        #                                embed_dim=emb_dim,
-        #                                decoder_dim=decoder_dim,
-        #                                vocab_size=len(word_map),
-        #                                dropout=dropout)
-        # decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
-        #                                      lr=decoder_lr)
-        decoder = transformer.Decoder(len(word_map), img_feature_channels, embedding_dim, num_decoder_blocks, num_decoder_heads, device=device)
-        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=decoder_lr, weight_decay=weight_decay)
-
+        decoder = transformer.Decoder(len(word_map), img_feature_channels, embed_dim, num_decoder_layers, nhead, device=device)
+        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()), lr=learning_rate, weight_decay=weight_decay)
     else:
         checkpoint = torch.load(checkpoint)
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
-        best_bleu4 = checkpoint['bleu-4']
+        bleu1 = checkpoint['bleu-1']
+        bleu2 = checkpoint['bleu-2']
+        bleu3 = checkpoint['bleu-3']
+        bleu4 = checkpoint['bleu-4']
+        # best_bleu4 = checkpoint['bleu-4']
         decoder = checkpoint['decoder']
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
@@ -112,6 +112,8 @@ def main():
         CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True) 
 
+    print("------", "Training started for " + ckpt_dir_prefix + " with learning rate", learning_rate, "------")
+
     # Epochs
     for epoch in range(start_epoch, epochs):
 
@@ -133,10 +135,10 @@ def main():
               epoch=epoch)
 
         # One epoch's validation
-        recent_bleu4 = validate(val_loader=val_loader,
-                                encoder=encoder,
-                                decoder=decoder,
-                                criterion=criterion)
+        recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4 = validate(val_loader=val_loader,
+                                                                            encoder=encoder,
+                                                                            decoder=decoder,
+                                                                            criterion=criterion)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -148,8 +150,10 @@ def main():
             epochs_since_improvement = 0
 
         # Save checkpoint
-        save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
-                        decoder_optimizer, recent_bleu4, is_best)
+        save_checkpoint_new(ckpt_dir_prefix, data_name, epoch, epochs_since_improvement, decoder, decoder_optimizer, 
+                            recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4, is_best, 
+                            learning_rate, None, embed_dim, nhead, None,
+                            num_decoder_layers, None, dropout)
 
 
 def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
@@ -320,139 +324,28 @@ def validate(val_loader, encoder, decoder, criterion):
                       'Top-5 Accuracy {top5.val:.3f} ({top5.avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,
                                                                                 loss=losses, top5=top5accs))
 
-            # Store references (true captions), and hypothesis (prediction) for each image
-            # If for n images, we have n hypotheses, and references a, b, c... for each image, we need -
-            # references = [[ref1a, ref1b, ref1c], [ref2a, ref2b], ...], hypotheses = [hyp1, hyp2, ...]
-
-            # References
-            # allcaps = allcaps[sort_ind]  # because images were sorted in the decoder
-            # for j in range(allcaps.shape[0]):
-            #     img_caps = allcaps[j].tolist()
-            #     img_captions = list(
-            #         map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>']}],
-            #             img_caps))  # remove <start> and pads
-            #     references.append(img_captions)
-            
-            # # Hypotheses
-            # _, preds = torch.max(scores_copy, dim=2)
-            # preds = preds.tolist()
-            # temp_preds = list()
-            # for j, p in enumerate(preds):
-            #     temp_preds.append(preds[j][:decode_lengths[j]])  # remove pads
-            # preds = temp_preds
-            # hypotheses.extend(preds)
-
-            # assert len(references) == len(hypotheses)
-
-
             rev_word_map = {v: k for k, v in word_map.items()} 
-            # for i in range(len(references)):
-            #     ref, hyp = references[i], hypotheses[i]
-            #     for i in range(len(ref)):
-            #         ref_words = [rev_word_map[ind] for ind in ref[i]]
-            #         print("REF", ref_words)
-                
-            #     hyp_words = [rev_word_map[ind] for ind in pred]
-            #     print("Hyp", hyp_words)
-
-            # for i in range(encoder_out.shape[0]):
-            #     pred, _ = predict(decoder, encoder_out[i].reshape(1, encoder_out.shape[1], encoder_out.shape[2]), 2, 22)
-            #     hypotheses.append(pred)
-            #     if i == 0:
-            #         ref_words = [rev_word_map[int(ind)] for ind in caps[0]]
-            #         hyp_words = [rev_word_map[int(ind)] for ind in pred]
-            #         print("REF", ref_words)
-            #         print("HYP", hyp_words)
-            captions = [[rev_word_map[int(ind)] for ind in cap] for cap in caps]
+            captions = [[rev_word_map[int(ind)] for ind in cap if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']] for cap in caps]
             references.extend(captions)
-            pred = greedy_decoding(decoder, encoder_out, 2631, 2632, 0, rev_word_map, 22, device)
-            hypotheses.extend(pred)
-            if i == 0:
-                print("Ref 0", captions[0])
-                print("Pred 0", pred[0])
-                print("Ref 1", captions[1])
-                print("Pred 1", pred[1])
-                print("Ref 2", captions[2])
-                print("Pred 2", pred[2])
+            preds = greedy_decoding(decoder, encoder_out, 2631, 2632, 0, rev_word_map, 22, device)
+            preds = [[char for char in pred if char not in ['<start>', '<end>', '<pad>']] for pred in preds]
+            hypotheses.extend(preds)
+            if i % 20 == 0:
+                rand_idx = np.random.randint(0, len(captions))
+                print("Ref", captions[rand_idx])
+                print("Pred", preds[rand_idx])
+
 
 
         # Calculate BLEU-4 scores
+        bleu1 = corpus_bleu(references, hypotheses, weights=(1,0,0,0))
+        bleu2 = corpus_bleu(references, hypotheses, weights=(0.5,0.5,0,0))
+        bleu3 = corpus_bleu(references, hypotheses, weights=(0.33,0.33,0.33,0))
         bleu4 = corpus_bleu(references, hypotheses)
 
-        print(
-            '\n * LOSS - {loss.avg:.3f}, TOP-5 ACCURACY - {top5.avg:.3f}, BLEU-4 - {bleu}\n'.format(
-                loss=losses,
-                top5=top5accs,
-                bleu=bleu4))
+        print('BLEU-1 - {bleu1}, BLEU-2 - {bleu2}, BLEU-3 - {bleu3}, BLEU-4 - {bleu4}\n'.format(bleu1=bleu1, bleu2=bleu2, bleu3=bleu3, bleu4=bleu4))
 
-    return bleu4
-
-
-def predict(decoder, source_input, beam_size=1, max_length=12):
-        """
-        Given a sentence in the source language, you should output a sentence in the target
-        language of length at most `max_length` that you generate using a beam search with
-        the given `beam_size`.
-
-        Note that the start of sentence token is 0 and the end of sentence token is 1.
-
-        Return the final top beam (decided using average log-likelihood) and its average
-        log-likelihood.
-        """
-        decoder.eval()
-
-        logits, _ = decoder(source_input, None, torch.tensor([2631], dtype=torch.int32).to(device).reshape(1, -1))
-        log_prob = torch.log(torch.nn.functional.softmax(logits.detach()[0][-1]))
-        top_probs, top_indices = torch.topk(log_prob, beam_size)
-        targets = []
-        prob_sums = []
-        final = []
-        final_prob_sums = []
-        for i in range(beam_size):
-            token = top_indices[i]
-            if token == 2632: # end token
-                final.append(torch.tensor([2631, token]))
-                final_prob_sums.append(top_probs[i])
-            else:
-                targets.append(torch.tensor([2631, token]))
-                prob_sums.append(top_probs[i])
-        beam_size -= len(final)
-        
-        for itr in range(2, max_length):
-            log_prob_beams = []
-            log_prob_beams_norm = []
-            for i in range(beam_size):
-                logits, _ = decoder(source_input, None, torch.tensor(targets[i]).to(device).view(1, -1))
-                log_prob = torch.log(torch.nn.functional.softmax(logits.detach()[0][-1]))
-                log_prob_beams.append(log_prob)
-                log_prob_beams_norm.append((log_prob + prob_sums[i]) / (len(targets[i]) + 1))
-            log_prob_beams = torch.cat(log_prob_beams)
-            log_prob_beams_norm = torch.cat(log_prob_beams_norm)
-            top_probs, top_indices = torch.topk(log_prob_beams_norm, beam_size)
-            new_targets = []
-            new_prob_sums = []
-            for i in range(beam_size):
-                token = top_indices[i] % (decoder.vocab_size + 1)
-                prev_idx = top_indices[i] // (decoder.vocab_size + 1)
-                if token == 2632: # end token
-                    final.append(torch.cat((targets[prev_idx], torch.tensor([token]))))
-                    final_prob_sums.append(prob_sums[prev_idx] + log_prob_beams[top_indices[i]])
-                else:
-                    new_targets.append(torch.cat((targets[prev_idx], torch.tensor([token]))))
-                    new_prob_sums.append(prob_sums[prev_idx] + log_prob_beams[top_indices[i]])
-            beam_size -= len(targets) - len(new_targets)
-            targets = new_targets
-            prob_sums = new_prob_sums
-            if beam_size == 0:
-                break
-            
-        for i in range(beam_size):
-            final.append(targets[i])
-            final_prob_sums.append(prob_sums[i])
-        final_prob_sums = [prob.to(torch.device("cpu")) for prob in final_prob_sums]
-        final_prob_avg = np.array(final_prob_sums) / np.array([len(final[i]) for i in range(len(final))])
-        best_idx = np.argmax(final_prob_avg) 
-        return final[best_idx], final_prob_avg[best_idx]
+    return bleu1, bleu2, bleu3, bleu4
 
 
 def greedy_decoding(model, img_features_batched, sos_id, eos_id, pad_id, idx2word, max_len, device):
