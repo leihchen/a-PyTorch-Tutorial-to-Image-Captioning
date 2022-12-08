@@ -31,24 +31,25 @@ learning_rate = 0.0001
 patch_size=8
 embed_dim=128
 max_len=22
-nhead=8
-num_encoder_layers=4
-num_decoder_layers=4
-dim_feedforward=512
-dropout=0.1
+nhead=16
+num_encoder_layers=6
+num_decoder_layers=6
+dim_feedforward=1024
+dropout=0.5
 
 # Training parameters
 start_epoch = 0
 epochs = 30  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 16
+batch_size = 8
 workers = 0  # for data-loading; right now, only 1 works with h5py
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-checkpoint = None  # path to checkpoint, None if none
-ckpt_dir_prefix = "ckpt_8_4_4/"
+
+ckpt_dir_prefix = f"ckpt_{nhead}_{num_decoder_layers}/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
+checkpoint = None
 # checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
