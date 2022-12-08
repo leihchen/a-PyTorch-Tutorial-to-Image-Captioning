@@ -93,6 +93,8 @@ def main():
         CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True) 
 
+    print("------Training started for " + ckpt_dir_prefix + " with learning rate", learning_rate)
+
     # Epochs
     for epoch in range(start_epoch, epochs):
 
