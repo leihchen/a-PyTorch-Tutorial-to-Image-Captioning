@@ -5,7 +5,9 @@ import torch.utils.data
 import torchvision.transforms as transforms
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
-from models import Encoder, DecoderWithAttention
+from models_ori import Encoder, DecoderWithAttention
+# from models_vit import Encoder, DecoderWithAttention
+# from models_rn import Encoder, DecoderWithAttention
 from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
