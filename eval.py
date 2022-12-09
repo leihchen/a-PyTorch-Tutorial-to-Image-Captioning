@@ -9,10 +9,10 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 # Parameters
-data_folder = '/home/chenandrew683/Downloads/Flicker8k'  # folder with data files saved by create_input_files.py
+data_folder = '/Users/harddrive/Downloads/Flicker8k'  # folder with data files saved by create_input_files.py
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'  # base name shared by data files
 checkpoint = './BEST_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'  # model checkpoint
-word_map_file = '/home/chenandrew683/Downloads/Flicker8k/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data was encoded with and the model was trained with
+word_map_file = '/Users/harddrive/Downloads/Flicker8k/WORDMAP_flickr8k_5_cap_per_img_5_min_word_freq.json'  # word map, ensure it's the same the data was encoded with and the model was trained with
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
@@ -176,4 +176,5 @@ def evaluate(beam_size):
 
 if __name__ == '__main__':
     beam_size = 1
-    print("\nBLEU-4 score @ beam size of %d is %.4f." % (beam_size, evaluate(beam_size)))
+    for i in range(1,5):
+        print("\nBLEU-4 score @ beam size of %d is %.4f." % (i, evaluate(i)))
