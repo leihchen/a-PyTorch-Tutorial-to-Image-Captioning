@@ -31,9 +31,9 @@ learning_rate = 0.0001
 patch_size=8
 embed_dim=120
 max_len=22
-nhead=6
-num_encoder_layers=3
-num_decoder_layers=3
+nhead=3
+num_encoder_layers=2
+num_decoder_layers=2
 dim_feedforward=512
 dropout=0.2
 

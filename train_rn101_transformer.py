@@ -59,8 +59,8 @@ fine_tune_encoder = False  # fine-tune encoder?
 ckpt_dir_prefix = f"ckpt_rn_transformer_{nhead}_{num_decoder_layers}_1024_0.5/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
-checkpoint = None 
-# checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
+# checkpoint = None 
+checkpoint = ckpt_dir_prefix + "checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
 def main():
@@ -100,10 +100,10 @@ def main():
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
         encoder_optimizer = checkpoint['encoder_optimizer']
-        if fine_tune_encoder is True and encoder_optimizer is None:
-            encoder.fine_tune(fine_tune_encoder)
-            encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
-                                                 lr=encoder_lr)
+        print(checkpoint['epoch'])
+        print(bleu1)
+        return
+
 
     # Move to GPU, if available
     decoder = decoder.to(device)
