@@ -31,9 +31,9 @@ learning_rate = 0.0001
 patch_size=8
 embed_dim=120
 max_len=22
-nhead=3
-num_encoder_layers=2
-num_decoder_layers=2
+nhead=5
+num_encoder_layers=3
+num_decoder_layers=5
 dim_feedforward=512
 dropout=0.2
 
@@ -48,8 +48,8 @@ print_freq = 100  # print training/validation stats every __ batches
 ckpt_dir_prefix = f"ckpt_{nhead}_{num_encoder_layers}_{num_decoder_layers}/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
-checkpoint = None 
-# checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
+# checkpoint = None 
+checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
 def main():
@@ -83,8 +83,8 @@ def main():
         model = checkpoint['model']
         model = model.to(device)
         optimizer = checkpoint['optimizer']
-        # print(checkpoint["epoch"])
-        # return
+        print(checkpoint["epoch"])
+        return
         
 
 

@@ -11,7 +11,7 @@ from tqdm import tqdm
 # Parameters
 data_folder = 'flickr8k_output'
 data_name = 'flickr8k_5_cap_per_img_5_min_word_freq'
-checkpoint = 'checkpoints/new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'
+checkpoint = 'ckpt_5_3_5/new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar'
 word_map_file = os.path.join(data_folder, 'WORDMAP_' + data_name + '.json')
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # sets device for model and PyTorch tensors
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
@@ -44,7 +44,7 @@ def evaluate(beam_size, max_length=15):
     loader = torch.utils.data.DataLoader(
         CaptionDataset(data_folder, data_name, 'TEST', transform=transforms.Compose([normalize])),
         batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
-
+    print("Test dataset len:", len(loader))
     # Batched Beam Search, thus do not use a batch_size greater than 1 - IMPORTANT!
 
     # Lists to store references (true captions), and hypothesis (prediction) for each image
@@ -118,17 +118,30 @@ def evaluate(beam_size, max_length=15):
         best_idx = np.argmax(final_prob_avg) 
         best_pred = final[best_idx]
 
-        ref = [rev_word_map[int(ind)] for ind in caps[0] if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']]
-        hyp = [rev_word_map[int(ind)] for ind in best_pred if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']]
-        references.append(ref)
-        hypotheses.append(hyp)
+        # ref = [rev_word_map[int(ind)] for ind in caps[0] if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']]
+        # hyp = [rev_word_map[int(ind)] for ind in best_pred if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']]
+        # references.append(ref)
+        # hypotheses.append(hyp)
 
-        if batch_idx % 10 == 0:
-            print("Ref", ref)
-            print("Pred", hyp)
+        captions = []
+        for j in range(allcaps.shape[0]):
+            img_caps = allcaps[j].tolist()
+            img_captions = list(
+                map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>'], word_map['<end>']}],
+                    img_caps))  # remove <start> and pads
+            captions.append(img_captions)
+        references.append(captions[0])
 
-        if batch_idx == 1000:
-            break
+        preds = [int(ind) for ind in best_pred if int(ind) not in {word_map['<start>'], word_map['<pad>'], word_map['<end>']}]
+        hypotheses.append(preds)
+
+        # if batch_idx % 10 == 0:
+        print("Ref", [[rev_word_map[ind] for ind in cap] for cap in captions[0]])
+        print("Pred", [rev_word_map[ind] for ind in preds])
+        print()
+
+        # if batch_idx == 1000:
+        #     break
         
 
     # Calculate BLEU-4 scores

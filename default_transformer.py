@@ -79,8 +79,8 @@ class ImageTransformer(Module):
         self.device=device
         
         self.patch_embed = PatchEmbedding(img_size, patch_size, in_chans, embed_dim)
-        # self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
-        self.pos_embed = PositionalEncoding(embed_dim, device=device)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.n_patches, embed_dim))
+        # self.pos_embed = PositionalEncoding(embed_dim, device=device)
         
         self.trg_emb = nn.Embedding(len_vocab, embed_dim)
         self.trg_pos_emb = nn.Embedding(max_len, embed_dim)
@@ -98,8 +98,8 @@ class ImageTransformer(Module):
     def forward(self, images, captions):
         # embed images
         embed_imgs = self.patch_embed(images)
-        # embed_imgs = embed_imgs + self.pos_embed
-        embed_imgs = self.pos_embed(embed_imgs)
+        embed_imgs = self.pos_embed + embed_imgs
+        # embed_imgs = self.pos_embed(embed_imgs)
         # embed captions
         B, trg_seq_len = captions.shape
         trg_positions = (torch.arange(0, trg_seq_len).expand(B, trg_seq_len).to(self.device))
