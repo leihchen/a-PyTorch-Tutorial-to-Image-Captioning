@@ -31,40 +31,24 @@ learning_rate = 0.0001
 patch_size=8
 embed_dim=120
 max_len=22
-<<<<<<< HEAD
-nhead=16
-num_encoder_layers=6
-num_decoder_layers=6
-dim_feedforward=1024
-dropout=0.5
-=======
-nhead=3
-num_encoder_layers=2
-num_decoder_layers=2
+nhead=6
+num_encoder_layers=3
+num_decoder_layers=3
 dim_feedforward=512
-dropout=0.1
->>>>>>> 63e9ab423698b151d79752c89164e4eafb992861
+dropout=0.2
 
 # Training parameters
 start_epoch = 0
 epochs = 30  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 8
+batch_size = 32
 workers = 0  # for data-loading; right now, only 1 works with h5py
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-<<<<<<< HEAD
-
-ckpt_dir_prefix = f"ckpt_{nhead}_{num_decoder_layers}/"
-if not os.path.exists(ckpt_dir_prefix):
-   os.makedirs(ckpt_dir_prefix)
-checkpoint = None
-=======
 ckpt_dir_prefix = f"ckpt_{nhead}_{num_encoder_layers}_{num_decoder_layers}/"
 if not os.path.exists(ckpt_dir_prefix):
    os.makedirs(ckpt_dir_prefix)
 checkpoint = None 
->>>>>>> 63e9ab423698b151d79752c89164e4eafb992861
 # checkpoint = ckpt_dir_prefix + "new_checkpoint_flickr8k_5_cap_per_img_5_min_word_freq.pth.tar"
 
 
@@ -114,8 +98,13 @@ def main():
         CaptionDataset(data_folder, data_name, 'VAL', transform=transforms.Compose([normalize])),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True) 
 
-    print("------Training started for " + ckpt_dir_prefix + " with learning rate", learning_rate)
+    print("------", "Training started for " + ckpt_dir_prefix + " with learning rate", learning_rate, "------")
 
+    losses = []
+    bleu1s = []
+    bleu2s = []
+    bleu3s = []
+    bleu4s = []
     # Epochs
     for epoch in range(start_epoch, epochs):
 
@@ -126,13 +115,18 @@ def main():
             adjust_learning_rate(optimizer, 0.8)
 
         # One epoch's training
-        train(train_loader=train_loader,
+        loss = train(train_loader=train_loader,
               model=model,
               opt=optimizer,
               epoch=epoch)
+        losses.append(loss)
 
         # One epoch's validation
         recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4 = validate(val_loader=val_loader, model=model)
+        bleu1s.append(recent_bleu1)
+        bleu2s.append(recent_bleu2)
+        bleu3s.append(recent_bleu3)
+        bleu4s.append(recent_bleu4)
 
         # Check if there was an improvement
         is_best = recent_bleu4 > best_bleu4
@@ -145,7 +139,7 @@ def main():
 
         # Save checkpoint
         save_checkpoint_new(ckpt_dir_prefix, data_name, epoch, epochs_since_improvement, model, optimizer, 
-                            recent_bleu1, recent_bleu2, recent_bleu3, recent_bleu4, is_best, 
+                            losses, bleu1s, bleu2s, bleu3s, bleu4s, is_best, 
                             learning_rate, patch_size, embed_dim, nhead, num_encoder_layers,
                             num_decoder_layers, dim_feedforward, dropout)
         # save_checkpoint_test(ckpt_dir_prefix, data_name, epoch, epochs_since_improvement, model, optimizer, 
@@ -177,7 +171,7 @@ def train(train_loader, model, opt, epoch):
     start = time.time()
     
     # Batches
-    outs = []
+    loss_sum = 0
     for i, (imgs, caps, caplens) in enumerate(train_loader):
         if i == len(train_loader) - 1:
             break
@@ -191,7 +185,7 @@ def train(train_loader, model, opt, epoch):
 
         # Forward prop.
         loss = model.training_step((imgs, caps), i)
-        outs.append(loss.detach())
+        loss_sum += loss.detach()
 
         opt.zero_grad()
         loss.backward()
@@ -209,6 +203,7 @@ def train(train_loader, model, opt, epoch):
                         batch_time=batch_time,
                         data_time=data_time, loss=losses,
                         top5=top5accs))
+    return loss_sum / len(train_loader)
                                                                     
 
 def validate(val_loader, model):
@@ -247,17 +242,26 @@ def validate(val_loader, model):
 
             rev_word_map = {v: k for k, v in word_map.items()}
 
-            captions = [[rev_word_map[int(ind)] for ind in cap if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']] for cap in caps]
+            # captions = [[rev_word_map[int(ind)] for ind in cap if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']] for cap in caps]
+            # references.extend(captions)
+
+            captions = []
+            for j in range(allcaps.shape[0]):
+                img_caps = allcaps[j].tolist()
+                img_captions = list(
+                    map(lambda c: [w for w in c if w not in {word_map['<start>'], word_map['<pad>'], word_map['<end>']}],
+                        img_caps))  # remove <start> and pads
+                captions.append(img_captions)
             references.extend(captions)
 
             preds = model.predict(imgs)
-            preds = [[rev_word_map[int(ind)] for ind in pred if rev_word_map[int(ind)] not in ['<start>', '<end>', '<pad>']] for pred in preds]
+            preds = [[int(ind) for ind in pred if int(ind) not in {word_map['<start>'], word_map['<pad>'], word_map['<end>']}] for pred in preds]
             hypotheses.extend(preds)
 
             if i % 20 == 0:
                 rand_idx = np.random.randint(0, len(captions))
-                print("Ref", captions[rand_idx])
-                print("Pred", preds[rand_idx])
+                print("Ref", [rev_word_map[ind] for ind in captions[rand_idx][0]])
+                print("Pred", [rev_word_map[ind] for ind in preds[rand_idx]])
 
 
         # Calculate BLEU-4 scores

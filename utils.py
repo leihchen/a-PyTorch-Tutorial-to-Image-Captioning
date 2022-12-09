@@ -246,7 +246,7 @@ def save_checkpoint(dir_prefix, data_name, epoch, epochs_since_improvement, enco
     if is_best:
         torch.save(state, dir_prefix + 'BEST_' + filename)
 
-def save_checkpoint_new(dir_prefix, data_name, epoch, epochs_since_improvement, model, opt, bleu1, bleu2, bleu3, bleu4, is_best, 
+def save_checkpoint_new(dir_prefix, data_name, epoch, epochs_since_improvement, model, opt, losses, bleu1s, bleu2s, bleu3s, bleu4s, is_best, 
                         learning_rate, patch_size, embed_dim, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, dropout):
     """
     Saves model checkpoint.
@@ -263,10 +263,11 @@ def save_checkpoint_new(dir_prefix, data_name, epoch, epochs_since_improvement, 
     """
     state = {'epoch': epoch,
              'epochs_since_improvement': epochs_since_improvement,
-             'bleu-1': bleu1,
-             'bleu-2': bleu2,
-             'bleu-3': bleu3,
-             'bleu-4': bleu4,
+             'loss': losses,
+             'bleu-1': bleu1s,
+             'bleu-2': bleu2s,
+             'bleu-3': bleu3s,
+             'bleu-4': bleu4s,
              'model': model,
              'optimizer': opt,
              'learning_rate': learning_rate,
